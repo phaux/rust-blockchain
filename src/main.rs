@@ -1,58 +1,47 @@
-use serde_json::json;
+use structopt::StructOpt;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
 
+use crate::blockchain::{Block, Blockchain};
+
+mod blockchain;
 mod hash;
 
-#[derive(Debug)]
-struct Blockchain {
-    blocks: Vec<Block>,
+#[derive(Debug, StructOpt)]
+struct Opt {
+    #[structopt(short = "P", long)]
+    port: u16,
+    #[structopt(short, long = "peer")]
+    peers: Vec<String>,
 }
 
-impl Blockchain {
-    fn new() -> Self {
-        Self { blocks: Vec::new() }
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let opt = Opt::from_args();
+    let listener = TcpListener::bind(("localhost", opt.port)).await?;
+
+    for peer in opt.peers {
+        let mut socket = TcpStream::connect(&peer).await?;
+        let mut bc = Blockchain::new();
+        bc.anchor(Block::new(&format!("hello from localhost:{}", opt.port)));
+        bc.anchor(Block::new("bye"));
+        socket.write_all(bc.serialize().as_bytes()).await?;
     }
 
-    fn anchor(&mut self, block: Block) {
-        self.blocks.push(block);
+    loop {
+        let (mut socket, _) = listener.accept().await?;
+        tokio::spawn(async move {
+            let mut json = String::new();
+            match socket.read_to_string(&mut json).await {
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("Socket write error: {:?}", err);
+                    return;
+                }
+            }
+            println!("Received: {:?}", json);
+        });
     }
-
-    fn serialize(&self) -> String {
-        let mut prev_block_data: Option<hash::BlockData> = None;
-        let mut json_blocks = Vec::new();
-
-        for block in &self.blocks {
-            let block_data = hash::BlockData {
-                parent_hash: prev_block_data.as_ref().map(|data| data.hash()),
-                payload: &block.payload,
-            };
-            json_blocks.push(json!({
-                "prev": block_data.parent_hash.as_ref().map(|hash| base64::encode(hash)),
-                "payload": &block_data.payload,
-                "digest": base64::encode(block_data.hash()),
-            }));
-            prev_block_data = Some(block_data);
-        }
-
-        json!({ "blocks": json_blocks }).to_string()
-    }
-}
-
-#[derive(Debug)]
-struct Block {
-    payload: String,
-}
-
-impl Block {
-    fn new(payload: &str) -> Self {
-        Self {
-            payload: payload.to_owned(),
-        }
-    }
-}
-
-fn main() {
-    let mut bc = Blockchain::new();
-    bc.anchor(Block::new("block 1"));
-    bc.anchor(Block::new("block 2"));
-    println!("{}", bc.serialize());
 }

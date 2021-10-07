@@ -11,3 +11,5 @@ serde_json = "*"
 bincode = "*"
 blake3 = "*"
 base64 = "*"
+tokio = { version = "*", features = ["full"] }
+structopt = "*"
