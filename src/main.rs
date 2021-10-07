@@ -7,7 +7,6 @@ use tokio::{
 use crate::blockchain::{Block, Blockchain};
 
 mod blockchain;
-mod hash;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -27,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut bc = Blockchain::new();
         bc.anchor(Block::new(&format!("hello from localhost:{}", opt.port)));
         bc.anchor(Block::new("bye"));
-        socket.write_all(bc.serialize().as_bytes()).await?;
+        socket.write_all(&serde_json::to_vec(&bc)?).await?;
     }
 
     loop {
