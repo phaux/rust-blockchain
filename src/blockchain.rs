@@ -1,7 +1,6 @@
 use std::{convert::TryFrom, fmt::Display};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 /// Blockchain in-memory representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,7 +141,7 @@ fn serialize_test() {
     bc.anchor(Block::new("!"));
     assert_eq!(
         serde_json::to_value(&bc).unwrap(),
-        json!({
+        serde_json::json!({
             "blocks":[
                 {"prev": null, "payload": "hello", "digest": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM="},
                 {"prev": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM=", "payload": "world", "digest": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI="},
@@ -154,7 +153,7 @@ fn serialize_test() {
 
 #[test]
 fn deserialize_test_fail() {
-    let bc = serde_json::from_value::<Blockchain>(json!({
+    let bc = serde_json::from_value::<Blockchain>(serde_json::json!({
         "blocks":[
             {"prev": null, "payload": "hello", "digest": "0000000000000000000000000000000000000000000="},
         ]
