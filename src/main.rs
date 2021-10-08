@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opt = Opt::from_args();
     let listener = TcpListener::bind(("localhost", opt.port)).await?;
 
+    // Send
     for peer in opt.peers {
         let mut socket = TcpStream::connect(&peer).await?;
         let mut bc = Blockchain::new();
@@ -30,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         socket.write_all(&serde_json::to_vec(&bc)?).await?;
     }
 
+    // Receive
     loop {
         let (mut socket, _) = listener.accept().await?;
         tokio::spawn(async move {

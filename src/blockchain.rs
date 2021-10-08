@@ -1,13 +1,16 @@
 use std::{convert::TryFrom, fmt::Display};
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
+/// Blockchain in-memory representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "BlockchainData", into = "BlockchainData")]
 pub struct Blockchain {
     pub blocks: Vec<Block>,
 }
 
+/// Block in-memory representation.
 #[derive(Debug, Clone)]
 pub struct Block {
     pub payload: String,
@@ -31,11 +34,13 @@ impl Block {
     }
 }
 
+/// Serialized Blockchain representation.
 #[derive(Debug, Serialize, Deserialize)]
 struct BlockchainData {
     blocks: Vec<BlockData>,
 }
 
+/// Serialized Block representation.
 #[derive(Debug, Serialize, Deserialize)]
 struct BlockData {
     #[serde(with = "digest::opt")]
@@ -104,6 +109,7 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Computes hash based on block fields.
 fn get_hash(prev: Option<[u8; 32]>, payload: &str) -> [u8; 32] {
     #[derive(Debug, Serialize)]
     struct HashInput<'a> {
@@ -116,9 +122,48 @@ fn get_hash(prev: Option<[u8; 32]>, payload: &str) -> [u8; 32] {
     blake3::hash(&bytes).into()
 }
 
+#[test]
+fn get_hash_test() {
+    let hash = get_hash(None, "test");
+    assert_eq!(
+        hash,
+        [
+            117, 154, 127, 33, 90, 227, 203, 89, 28, 80, 35, 144, 68, 16, 100, 195, 44, 203, 115,
+            5, 144, 224, 214, 157, 13, 98, 56, 45, 28, 239, 201, 88
+        ]
+    );
+}
+
+#[test]
+fn serialize_test() {
+    let mut bc = Blockchain::new();
+    bc.anchor(Block::new("hello"));
+    bc.anchor(Block::new("world"));
+    bc.anchor(Block::new("!"));
+    assert_eq!(
+        serde_json::to_value(&bc).unwrap(),
+        json!({
+            "blocks":[
+                {"prev": null, "payload": "hello", "digest": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM="},
+                {"prev": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM=", "payload": "world", "digest": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI="},
+                {"prev": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI=", "payload": "!", "digest": "lbqFTR8Qq7RE07K7VyxwN9WLuQm5mcFwWmndVM4g+Q8="},
+            ]
+        })
+    );
+}
+
+#[test]
+fn deserialize_test_fail() {
+    let bc = serde_json::from_value::<Blockchain>(json!({
+        "blocks":[
+            {"prev": null, "payload": "hello", "digest": "0000000000000000000000000000000000000000000="},
+        ]
+    }));
+    assert!(bc.is_err())
+}
+
 // Serialize/deserialize base64 digest into/from byte array
 mod digest {
-
     use serde::{de::Error, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(v: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
