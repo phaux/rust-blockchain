@@ -26,6 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut bc = Blockchain::new();
         bc.anchor(Block::new(&format!("hello from localhost:{}", opt.port)));
         bc.anchor(Block::new("bye"));
+        println!("Sending: {:?}", bc);
         socket.write_all(&serde_json::to_vec(&bc)?).await?;
     }
 
@@ -36,11 +37,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match socket.read_to_string(&mut json).await {
                 Ok(_) => {}
                 Err(err) => {
-                    eprintln!("Socket write error: {:?}", err);
+                    eprintln!("Socket write error: {}", err);
                     return;
                 }
             }
-            println!("Received: {:?}", json);
+            let bc: Blockchain = match serde_json::from_str(&json) {
+                Ok(bc) => bc,
+                Err(err) => {
+                    eprintln!("Deserialize error: {}", err);
+                    return;
+                }
+            };
+            println!("Received: {:?}", bc);
         });
     }
 }

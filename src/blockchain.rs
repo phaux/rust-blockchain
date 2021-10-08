@@ -1,14 +1,16 @@
+use std::{convert::TryFrom, fmt::Display};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(from = "BlockchainData", into = "BlockchainData")]
+#[serde(try_from = "BlockchainData", into = "BlockchainData")]
 pub struct Blockchain {
-    blocks: Vec<Block>,
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    payload: String,
+    pub payload: String,
 }
 
 impl Blockchain {
@@ -43,52 +45,78 @@ struct BlockData {
     digest: [u8; 32],
 }
 
+/// Computes digests when serializing
 impl Into<BlockchainData> for Blockchain {
     fn into(self) -> BlockchainData {
         let mut blocks = Vec::new();
-        let mut prev_block = None;
-        for block in &self.blocks {
-            let prev_hash = prev_block.as_ref().map(get_hash);
-            let current_block = HashInput {
-                prev: prev_hash,
-                payload: &block.payload,
-            };
-            let current_hash = get_hash(&current_block);
+        let mut prev_hash = None;
+        for block in self.blocks {
+            let current_hash = get_hash(prev_hash, &block.payload);
             blocks.push(BlockData {
-                prev: current_block.prev.clone(),
-                payload: current_block.payload.to_owned(),
-                digest: (current_hash),
+                prev: prev_hash,
+                payload: block.payload,
+                digest: current_hash,
             });
-            prev_block = Some(current_block);
+            prev_hash = Some(current_hash);
         }
         BlockchainData { blocks }
     }
 }
 
-impl From<BlockchainData> for Blockchain {
-    fn from(blockchain: BlockchainData) -> Self {
-        Self {
-            blocks: blockchain
-                .blocks
-                .into_iter()
-                .map(|block| Block {
-                    payload: block.payload,
-                })
-                .collect(),
+/// Checks digests when deserializing
+impl TryFrom<BlockchainData> for Blockchain {
+    type Error = Error;
+
+    fn try_from(data: BlockchainData) -> Result<Self, Self::Error> {
+        let mut prev_hash = None;
+        let mut blocks = Vec::new();
+        for block in data.blocks {
+            if block.prev != prev_hash {
+                return Err(Error::InvalidParentDigest);
+            }
+            let current_hash = get_hash(block.prev, &block.payload);
+            if block.digest != current_hash {
+                return Err(Error::InvalidDigest);
+            }
+            blocks.push(Block {
+                payload: block.payload,
+            });
+            prev_hash = Some(current_hash);
+        }
+        Ok(Blockchain { blocks })
+    }
+}
+
+#[derive(Debug)]
+enum Error {
+    InvalidDigest,
+    InvalidParentDigest,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            &Error::InvalidDigest => write!(f, "invalid digest"),
+            &Error::InvalidParentDigest => write!(f, "invalid parent digest"),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-struct HashInput<'a> {
-    prev: Option<[u8; 32]>,
-    payload: &'a str,
+impl std::error::Error for Error {}
+
+fn get_hash(prev: Option<[u8; 32]>, payload: &str) -> [u8; 32] {
+    #[derive(Debug, Serialize)]
+    struct HashInput<'a> {
+        prev: Option<[u8; 32]>,
+        payload: &'a str,
+    }
+
+    let input = HashInput { prev, payload };
+    let bytes = bincode::serialize(&input).unwrap();
+    blake3::hash(&bytes).into()
 }
 
-fn get_hash(input: &HashInput) -> [u8; 32] {
-    blake3::hash(&bincode::serialize(input).unwrap()).into()
-}
-
+// Serialize/deserialize base64 digest into/from byte array
 mod digest {
 
     use serde::{de::Error, Deserializer, Serializer};
