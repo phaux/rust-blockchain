@@ -4,7 +4,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::blockchain::{Block, Blockchain};
+use crate::blockchain::Blockchain;
 
 mod blockchain;
 
@@ -25,8 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for peer in opt.peers {
         let mut socket = TcpStream::connect(&peer).await?;
         let mut bc = Blockchain::new();
-        bc.anchor(Block::new(&format!("hello from localhost:{}", opt.port)));
-        bc.anchor(Block::new("bye"));
+        bc.anchor(&format!("hello from localhost:{}", opt.port));
+        bc.anchor("bye");
         println!("Sending: {:?}", bc);
         socket.write_all(&serde_json::to_vec(&bc)?).await?;
     }
@@ -50,6 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
             };
+            if let Err(err) = bc.validate() {
+                eprintln!("Validation error: {}", err);
+                return;
+            }
             println!("Received: {:?}", bc);
         });
     }

@@ -1,98 +1,92 @@
-use std::{convert::TryFrom, fmt::Display};
+use std::{collections::HashMap, convert::TryInto, fmt::Display};
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-/// Blockchain in-memory representation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "BlockchainData", into = "BlockchainData")]
+/// Serialized Blockchain representation.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Blockchain {
     pub blocks: Vec<Block>,
+    pub data: HashMap<Digest, Data>,
 }
 
-/// Block in-memory representation.
-#[derive(Debug, Clone)]
+/// Serialized Block representation.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Block {
+    pub prev: Option<Digest>,
+    pub payload: Digest,
+    pub digest: Digest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Data {
     pub payload: String,
 }
 
 impl Blockchain {
     pub fn new() -> Self {
-        Self { blocks: Vec::new() }
+        Self {
+            blocks: Vec::new(),
+            data: HashMap::new(),
+        }
     }
 
-    pub fn anchor(&mut self, block: Block) {
+    pub fn anchor(&mut self, payload: &str) {
+        let prev = self.blocks.last().map(|last| last.digest);
+        let data = Data {
+            payload: payload.into(),
+        };
+        let payload_digest = data.get_digest();
+        let mut block = Block {
+            prev,
+            payload: payload_digest,
+            digest: Digest::default(),
+        };
+        block.digest = block.get_digest();
         self.blocks.push(block);
+        self.data.insert(payload_digest, data);
+    }
+
+    pub fn validate(&self) -> Result<(), Error> {
+        let mut prev_hash = None;
+        for block in &self.blocks {
+            if block.prev != prev_hash {
+                return Err(Error::InvalidParentDigest);
+            }
+            if block.digest != block.get_digest() {
+                return Err(Error::InvalidDigest);
+            }
+            prev_hash = Some(block.digest);
+        }
+        Ok(())
     }
 }
 
 impl Block {
-    pub fn new(payload: &str) -> Self {
-        Self {
-            payload: payload.to_owned(),
+    /// Computes hash based on block fields.
+    fn get_digest(&self) -> Digest {
+        #[derive(Debug, Serialize)]
+        struct HashInput {
+            prev: Option<Digest>,
+            payload: Digest,
         }
+
+        let input = HashInput {
+            prev: self.prev,
+            payload: self.payload,
+        };
+        let bytes = bincode::serialize(&input).unwrap();
+        Digest(blake3::hash(&bytes).into())
     }
 }
 
-/// Serialized Blockchain representation.
-#[derive(Debug, Serialize, Deserialize)]
-struct BlockchainData {
-    blocks: Vec<BlockData>,
-}
-
-/// Serialized Block representation.
-#[derive(Debug, Serialize, Deserialize)]
-struct BlockData {
-    #[serde(with = "digest::opt")]
-    prev: Option<[u8; 32]>,
-    payload: String,
-    #[serde(with = "digest")]
-    digest: [u8; 32],
-}
-
-/// Computes digests when serializing
-impl Into<BlockchainData> for Blockchain {
-    fn into(self) -> BlockchainData {
-        let mut blocks = Vec::new();
-        let mut prev_hash = None;
-        for block in self.blocks {
-            let current_hash = get_hash(prev_hash, &block.payload);
-            blocks.push(BlockData {
-                prev: prev_hash,
-                payload: block.payload,
-                digest: current_hash,
-            });
-            prev_hash = Some(current_hash);
-        }
-        BlockchainData { blocks }
-    }
-}
-
-/// Checks digests when deserializing
-impl TryFrom<BlockchainData> for Blockchain {
-    type Error = Error;
-
-    fn try_from(data: BlockchainData) -> Result<Self, Self::Error> {
-        let mut prev_hash = None;
-        let mut blocks = Vec::new();
-        for block in data.blocks {
-            if block.prev != prev_hash {
-                return Err(Error::InvalidParentDigest);
-            }
-            let current_hash = get_hash(block.prev, &block.payload);
-            if block.digest != current_hash {
-                return Err(Error::InvalidDigest);
-            }
-            blocks.push(Block {
-                payload: block.payload,
-            });
-            prev_hash = Some(current_hash);
-        }
-        Ok(Blockchain { blocks })
+impl Data {
+    fn get_digest(&self) -> Digest {
+        Digest(blake3::hash(&self.payload.as_bytes()).into())
     }
 }
 
 #[derive(Debug)]
-enum Error {
+pub enum Error {
     InvalidDigest,
     InvalidParentDigest,
 }
@@ -108,91 +102,72 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Computes hash based on block fields.
-fn get_hash(prev: Option<[u8; 32]>, payload: &str) -> [u8; 32] {
-    #[derive(Debug, Serialize)]
-    struct HashInput<'a> {
-        prev: Option<[u8; 32]>,
-        payload: &'a str,
-    }
+// #[test]
+// fn get_hash_test() {
+//     let block = Block {
+//         prev: None,
+//         payload: Digest::default(),
+//         digest: Digest::default(),
+//     };
+//     assert_eq!(
+//         block.get_digest(),
+//         Digest([
+//             117, 154, 127, 33, 90, 227, 203, 89, 28, 80, 35, 144, 68, 16, 100, 195, 44, 203, 115,
+//             5, 144, 224, 214, 157, 13, 98, 56, 45, 28, 239, 201, 88
+//         ])
+//     );
+// }
 
-    let input = HashInput { prev, payload };
-    let bytes = bincode::serialize(&input).unwrap();
-    blake3::hash(&bytes).into()
-}
-
-#[test]
-fn get_hash_test() {
-    let hash = get_hash(None, "test");
-    assert_eq!(
-        hash,
-        [
-            117, 154, 127, 33, 90, 227, 203, 89, 28, 80, 35, 144, 68, 16, 100, 195, 44, 203, 115,
-            5, 144, 224, 214, 157, 13, 98, 56, 45, 28, 239, 201, 88
-        ]
-    );
-}
-
-#[test]
-fn serialize_test() {
-    let mut bc = Blockchain::new();
-    bc.anchor(Block::new("hello"));
-    bc.anchor(Block::new("world"));
-    bc.anchor(Block::new("!"));
-    assert_eq!(
-        serde_json::to_value(&bc).unwrap(),
-        serde_json::json!({
-            "blocks":[
-                {"prev": null, "payload": "hello", "digest": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM="},
-                {"prev": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM=", "payload": "world", "digest": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI="},
-                {"prev": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI=", "payload": "!", "digest": "lbqFTR8Qq7RE07K7VyxwN9WLuQm5mcFwWmndVM4g+Q8="},
-            ]
-        })
-    );
-}
+// #[test]
+// fn serialize_test() {
+//     let mut bc = Blockchain::new();
+//     bc.anchor("hello");
+//     bc.anchor("world");
+//     bc.anchor("!");
+//     assert_eq!(
+//         serde_json::to_value(&bc).unwrap(),
+//         serde_json::json!({
+//             "blocks":[
+//                 {"prev": null, "payload": "hello", "digest": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM="},
+//                 {"prev": "PNCuVuF/YvR3tjChYLHz62b2CNn/uTkX4TzpK2K31mM=", "payload": "world", "digest": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI="},
+//                 {"prev": "TvbjV6Oy0Ldi7b3E1Ay+JmwwO3LL9bjKyLvDQHOTSnI=", "payload": "!", "digest": "lbqFTR8Qq7RE07K7VyxwN9WLuQm5mcFwWmndVM4g+Q8="},
+//             ]
+//         })
+//     );
+// }
 
 #[test]
 fn deserialize_test_fail() {
     let bc = serde_json::from_value::<Blockchain>(serde_json::json!({
-        "blocks":[
+        "blocks": [
             {"prev": null, "payload": "hello", "digest": "0000000000000000000000000000000000000000000="},
         ]
-    }));
-    assert!(bc.is_err())
+    })).unwrap();
+    assert!(bc.validate().is_err());
 }
 
-// Serialize/deserialize base64 digest into/from byte array
-mod digest {
-    use serde::{de::Error, Deserializer, Serializer};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Digest(pub [u8; 32]);
 
-    pub fn serialize<S: Serializer>(v: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
-        opt::serialize(&Some(*v), s)
+impl Serialize for Digest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&base64::encode(&self.0))
     }
+}
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
-        Ok(opt::deserialize(d)?.ok_or(Error::custom("missing digest"))?)
+impl<'de> Deserialize<'de> for Digest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let str = <String>::deserialize(deserializer)?;
+        let vec = base64::decode(str).map_err(de::Error::custom)?;
+        let digest = vec
+            .try_into()
+            .map_err(|_| de::Error::custom("invalid digest length"))?;
+        Ok(Digest(digest))
     }
+}
 
-    pub mod opt {
-        use std::convert::TryInto;
-
-        use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
-
-        pub fn serialize<S: Serializer>(v: &Option<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
-            let base64 = v.map(base64::encode);
-            base64.serialize(s)
-        }
-
-        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<[u8; 32]>, D::Error> {
-            let str = match <Option<String>>::deserialize(d)? {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            let vec = base64::decode(str).map_err(Error::custom)?;
-            let digest = vec
-                .try_into()
-                .map_err(|_| Error::custom("invalid digest length"))?;
-            Ok(Some(digest))
-        }
+impl Default for Digest {
+    fn default() -> Self {
+        Self([0; 32])
     }
 }
